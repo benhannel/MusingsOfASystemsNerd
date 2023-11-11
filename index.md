@@ -2,7 +2,7 @@
 
 If a C++ program accesses unmapped memory, it will raise the signal SIGSEGV, which will (by default) terminate the process and dump core. However, the application can install a signal handler with POSIX's [sigaction](https://man7.org/linux/man-pages/man2/sigaction.2.html) which will be invoked instead. This signal handler is [very](https://man7.org/linux/man-pages/man7/signal-safety.7.html) [restricted](https://en.cppreference.com/w/cpp/utility/program/signal) in what it can do, since it can run by interrupting essentially any code in the program. Even so, signal handlers are very useful for collecting basic diagnostic information before terminating the process. For these examples, I ignore most of these restrictions since we know that the signal is not being raised from code holding locks, i.e. inside `malloc()`.
 
-Here is a basic example of installing a signal handler for SIGSEGV and then triggering a SIGSEGV. As expected, we dereference a null pointer, and the signal handler runs. The signal handler must terminate the process. Returning would be undefined behavior, though `longjump` can be used in some circumstances.
+Here is a basic example of installing a signal handler for SIGSEGV and then triggering a SIGSEGV. As expected, we dereference a null pointer, and the signal handler runs. The signal handler must terminate the process. Returning would be undefined behavior, though [`longjmp`](https://en.cppreference.com/w/cpp/utility/program/longjmp) can be used in some circumstances.
 ```
 #include <iostream>
 #include <signal.h>
