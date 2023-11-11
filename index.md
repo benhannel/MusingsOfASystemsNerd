@@ -28,7 +28,7 @@ int main() {
 ```
 Causing a critical signal
 In signalHandler
-<Program terimates with code 1>
+<Program termimates with code 1>
 ```
 [godbolt](https://godbolt.org/z/KadYdeeqo)
 
@@ -61,7 +61,7 @@ int main() {
 ```
 ```
 Causing a stack overflow
-<Program terimates with SIGSEGV>
+<Program termimates with SIGSEGV>
 ```
 [godbolt](https://godbolt.org/z/KcaPzPnfx)
 
