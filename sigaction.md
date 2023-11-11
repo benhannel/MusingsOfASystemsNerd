@@ -19,7 +19,9 @@ int main() {
     struct sigaction sigact;
     sigact.sa_sigaction = signalHandler;
     sigact.sa_flags = SA_SIGINFO;
-    int ret = sigaction(SIGSEGV, &sigact, nullptr);
+    int ret = sigemptyset(&sigact.sa_mask);
+    assert(ret == 0);
+    ret = sigaction(SIGSEGV, &sigact, nullptr);
     assert(ret == 0);
     std::cout << "Causing a critical signal" << std::endl;
     *(char*)nullptr = 0;
@@ -31,7 +33,7 @@ Causing a critical signal
 In signalHandler
 <Program terminates with code 1>
 ```
-[godbolt](https://godbolt.org/z/KadYdeeqo)
+[godbolt](https://godbolt.org/z/c8Ev1zWGE)
 
 ### Stack Overflow
 So this works for when dereferencing a null pointer. What about a more complicated sort of SIGSEGV - stack overflow? By default, signal handlers run on the same stack as the thread which caused the signal (at least for thread specific signals like SIGSEGV and SIGFPE), so the signal handler will immediately stack overflow itself, without being able to produce any kind of diagnostic.
@@ -54,7 +56,9 @@ int main() {
     struct sigaction sigact;
     sigact.sa_sigaction = signalHandler;
     sigact.sa_flags = SA_SIGINFO;
-    const auto ret = sigaction(SIGSEGV, &sigact, nullptr);
+    int ret = sigemptyset(&sigact.sa_mask);
+    assert(ret == 0);
+    ret = sigaction(SIGSEGV, &sigact, nullptr);
     assert(ret == 0);
     std::cout << "Causing a stack overflow" << std::endl;
     overflowTheStack();
@@ -65,7 +69,7 @@ int main() {
 Causing a stack overflow
 <Program terminates with SIGSEGV>
 ```
-[godbolt](https://godbolt.org/z/KcaPzPnfx)
+[godbolt](https://godbolt.org/z/647K8sxPW)
 
 ### Installing an alternate stack
 POSIX provides a tool to deal with this. For each thread, you can install an alternate signal handler stack with [`sigaltstack`](https://man7.org/linux/man-pages/man2/sigaltstack.2.html), which is special space reserved for just the signal handler. You can then register the signal handler with the `SA_ONSTACK` flag to `sigaction`, which causes the signal handler to run in this dedicated stack memory, even if the original stack was exhausted by a stack overflow.
@@ -97,6 +101,8 @@ int main() {
     struct sigaction sigact;
     sigact.sa_sigaction = signalHandler;
     sigact.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    ret = sigemptyset(&sigact.sa_mask);
+    assert(ret == 0);
     ret = sigaction(SIGSEGV, &sigact, nullptr);
     assert(ret == 0);
     std::cout << "Causing a stack overflow" << std::endl;
@@ -109,7 +115,7 @@ Causing a stack overflow
 In signalHandler
 <Program terminates with code 1>
 ```
-[godbolt](https://godbolt.org/z/6zcxsEqzs)
+[godbolt](https://godbolt.org/z/Padn8d4dd)
 
 ### Who watches the watchers?
 Signal handlers are code, and code has bugs. What if the signal handler itself causes a SIGSEGV? The default behavior with `sigaction` is to block the signal which caused the signal handler for the duration of the signal handler. In the case of `SIGSEGV`, causing the signal while it is blocked immediately terminates the process. This is sensible - the alternative scenario, where the signal isn't blocked, would cause an infinite loop where the signal handler invokes itself forever.
@@ -143,6 +149,8 @@ int main() {
     struct sigaction sigact;
     sigact.sa_sigaction = signalHandler;
     sigact.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    ret = sigemptyset(&sigact.sa_mask);
+    assert(ret == 0);
     ret = sigaction(SIGSEGV, &sigact, nullptr);
     assert(ret == 0);
     std::cout << "Causing a stack overflow" << std::endl;
@@ -155,7 +163,7 @@ Causing a stack overflow
 In signalHandler at 0x10b5d6c
 <Program terminates with SIGSEGV>
 ```
-[godbolt](https://godbolt.org/z/71PxWd3PM)
+[godbolt](https://godbolt.org/z/oGTW35acG)
 
 ### SA_NODEFER
 If for some reason we *want* to invoke the signal handler again if it segfaults, we can. The `SA_NODEFER` flag to `sigaction` overrides the default behavior, and leaves the signal unblocked during the signal handler. Alternatively, unblock the signal by calling [`sigprocmask`](https://man7.org/linux/man-pages/man2/sigprocmask.2.html) in the signal handler. If we segfault in the signal handler, it gets invoked again. But that leaves an open question - what memory does the second invocation of the signal handler run on? The original stack? The alternate stack? It turns out, it runs on the alternate stack, but *after* (smaller address) the memory already used for the first invocation of the signal handler. This means that with each invocation of the signal handler, we have less and less stack space left, until eventually we overflow the stack in the signal handler. This causes another SIGSEGV, but for some reason, this one terminates the process rather than invoking the signal handler again forever.
@@ -201,6 +209,8 @@ int main() {
     struct sigaction sigact;
     sigact.sa_sigaction = signalHandler;
     sigact.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    ret = sigemptyset(&sigact.sa_mask);
+    assert(ret == 0);
     ret = sigaction(SIGSEGV, &sigact, nullptr);
     assert(ret == 0);
     std::cout << "Causing a stack overflow" << std::endl;
@@ -222,7 +232,7 @@ On signal stack at 0x42d2b0 with 2727 bytes of stack memory remaining
 On signal stack at 0x42d2b0 with 1191 bytes of stack memory remaining
 <Program terminates with SIGSEGV>
 ```
-[godbolt](https://godbolt.org/z/6KvzTq7Pa)
+[godbolt](https://godbolt.org/z/s8YTPcxve)
 
 ### Stack Overflow in a signal handler
 Now what happens if we overflow the stack in the signal handler? Based on the example above, you might think it would terminate the process, since it seems that when the signal handler runs out of space that SIGSEGV doesn't cause the signal handler to run. However, in this case, it invokes the signal handler again at the same position on the alternate stack as the first time - not after the first invocation. That means the amount of stack memory doesn't decrease, and it really is an infinite loop, at least on some platforms.
@@ -268,6 +278,8 @@ int main() {
     struct sigaction sigact;
     sigact.sa_sigaction = signalHandler;
     sigact.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
+    ret = sigemptyset(&sigact.sa_mask);
+    assert(ret == 0);
     ret = sigaction(SIGSEGV, &sigact, nullptr);
     assert(ret == 0);
     std::cout << "Causing a stack overflow" << std::endl;
@@ -282,7 +294,7 @@ On signal stack at 0xac22b0 with 13159 bytes of stack memory remaining
 On signal stack at 0xac22b0 with 13159 bytes of stack memory remaining
 ...
 ```
-[godbolt](https://godbolt.org/z/vEaxeevPM)
+[godbolt](https://godbolt.org/z/hzojdPTKj)
 
 All tests done on [Ubuntu 20.04 (focal)](https://godbolt.org/z/3PKP8EGY5)
 
