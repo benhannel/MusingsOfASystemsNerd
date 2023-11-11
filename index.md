@@ -1,5 +1,6 @@
 ## Some oddities of sigaction and SA_ONSTACK
 
+### Installing a signal handler
 If a C++ program accesses unmapped memory, it will raise the signal SIGSEGV, which will (by default) terminate the process and dump core. However, the application can install a signal handler with POSIX's [sigaction](https://man7.org/linux/man-pages/man2/sigaction.2.html) which will be invoked instead. This signal handler is [very](https://man7.org/linux/man-pages/man7/signal-safety.7.html) [restricted](https://en.cppreference.com/w/cpp/utility/program/signal) in what it can do, since it can run by interrupting essentially any code in the program. Even so, signal handlers are very useful for collecting basic diagnostic information before terminating the process. For these examples, I ignore most of these restrictions since we know that the signal is not being raised from code holding locks, i.e. inside `malloc()`.
 
 Here is a basic example of installing a signal handler for SIGSEGV and then triggering a SIGSEGV. As expected, we dereference a null pointer, and the signal handler runs. The signal handler must terminate the process. Returning would be undefined behavior, though [`longjmp`](https://en.cppreference.com/w/cpp/utility/program/longjmp) can be used in some circumstances.
@@ -32,6 +33,7 @@ In signalHandler
 ```
 [godbolt](https://godbolt.org/z/KadYdeeqo)
 
+### Stack Overflow
 So this works for when dereferencing a null pointer. What about a more complicated sort of SIGSEGV - stack overflow? By default, signal handlers run on the same stack as the thread which caused the signal (at least for thread specific signals like SIGSEGV and SIGFPE), so the signal handler will immediately stack overflow itself, without being able to produce any kind of diagnostic.
 ```
 #include <iostream>
@@ -65,6 +67,7 @@ Causing a stack overflow
 ```
 [godbolt](https://godbolt.org/z/KcaPzPnfx)
 
+### Installing an alternate stack
 POSIX provides a tool to deal with this. For each thread, you can install an alternate signal handler stack with [`sigaltstack`](https://man7.org/linux/man-pages/man2/sigaltstack.2.html), which is special space reserved for just the signal handler. You can then register the signal handler with the `SA_ONSTACK` flag to `sigaction`, which causes the signal handler to run in this dedicated stack memory, even if the original stack was exhausted by a stack overflow.
 ```
 #include <iostream>
@@ -108,6 +111,7 @@ In signalHandler
 ```
 [godbolt](https://godbolt.org/z/6zcxsEqzs)
 
+### Who watches the watchers?
 Signal handlers are code, and code has bugs. What if the signal handler itself causes a SIGSEGV? The default behavior with `sigaction` is to block the signal which caused the signal handler for the duration of the signal handler. In the case of `SIGSEGV`, causing the signal while it is blocked immediately terminates the process. This is sensible - the alternative scenario, where the signal isn't blocked, would cause an infinite loop where the signal handler invokes itself forever.
 ```
 #include <iostream>
@@ -153,7 +157,7 @@ In signalHandler at 0x10b5d6c
 ```
 [godbolt](https://godbolt.org/z/71PxWd3PM)
 
-
+### SA_NODEFER
 If for some reason we *want* to invoke the signal handler again if it segfaults, we can. The `SA_NODEFER` flag to `sigaction` overrides the default behavior, and leaves the signal unblocked during the signal handler. Alternatively, unblock the signal by calling [`sigprocmask`](https://man7.org/linux/man-pages/man2/sigprocmask.2.html) in the signal handler. If we segfault in the signal handler, it gets invoked again. But that leaves an open question - what memory does the second invocation of the signal handler run on? The original stack? The alternate stack? It turns out, it runs on the alternate stack, but *after* (smaller address) the memory already used for the first invocation of the signal handler. This means that with each invocation of the signal handler, we have less and less stack space left, until eventually we overflow the stack in the signal handler. This causes another SIGSEGV, but for some reason, this one terminates the process rather than invoking the signal handler again forever.
 ```
 #include <iostream>
@@ -220,7 +224,7 @@ On signal stack at 0x42d2b0 with 1191 bytes of stack memory remaining
 ```
 [godbolt](https://godbolt.org/z/6KvzTq7Pa)
 
-
+### Stack Overflow in a signal handler
 Now what happens if we overflow the stack in the signal handler? Based on the example above, you might think it would terminate the process, since it seems that when the signal handler runs out of space that SIGSEGV doesn't cause the signal handler to run. However, in this case, it invokes the signal handler again at the same position on the alternate stack as the first time - not after the first invocation. That means the amount of stack memory doesn't decrease, and it really is an infinite loop, at least on some platforms.
 ```
 #include <iostream>
@@ -279,3 +283,8 @@ On signal stack at 0xac22b0 with 13159 bytes of stack memory remaining
 ...
 ```
 [godbolt](https://godbolt.org/z/vEaxeevPM)
+
+All tests done on [Ubuntu 20.04 (focal)](https://godbolt.org/z/3PKP8EGY5)
+
+### Closing Thoughts
+I'm not totally sure, but this behavior seems buggy to me. The `SA_ONSTACK` flag doesn't specify *where* on the alternate stack the signal handler should run, but the most sensible behavior seems to me to be to start at the largest address in the alternate stack so the handler has as much space as possible. `SA_ONSTACK` is only really useful for critical signals, and for critical signals the signal handler can never return, so it is acceptable to wipe out the contents of the stack from before the signal handler. Either way, the behavior should be consistent for `SIGSEGV`s caused by dereferencing bad data points, and those caused by overflowing the end of the stack.
